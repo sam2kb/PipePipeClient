@@ -58,6 +58,7 @@ import org.schabi.newpipe.player.playqueue.ChannelPlayQueue;
 import org.schabi.newpipe.player.playqueue.PlayQueue;
 import org.schabi.newpipe.player.playqueue.PlaylistPlayQueue;
 import org.schabi.newpipe.player.playqueue.SinglePlayQueue;
+import org.schabi.newpipe.restricted.RestrictedChannelAccess;
 import org.schabi.newpipe.util.Constants;
 import org.schabi.newpipe.util.DeviceUtils;
 import org.schabi.newpipe.util.ExtractorHelper;
@@ -492,10 +493,14 @@ public class RouterActivity extends AppCompatActivity {
                 returnList.add(backgroundPlayer);
             }
             // download is redundant for linkType CHANNEL AND PLAYLIST (till playlist downloading is
-            // not supported )
-            returnList.add(new AdapterChoiceItem(getString(R.string.download_key),
-                    getString(R.string.download),
-                    R.drawable.ic_file_download));
+            // not supported ). Restricted Mode: downloads are not offered at all, because the
+            // download library cannot be authorized per channel and hands its files to an external
+            // player.
+            if (!RestrictedChannelAccess.isRestricted(this)) {
+                returnList.add(new AdapterChoiceItem(getString(R.string.download_key),
+                        getString(R.string.download),
+                        R.drawable.ic_file_download));
+            }
 
             // Add to playlist is not necessary for CHANNEL and PLAYLIST linkType since those can
             // not be added to a playlist
@@ -634,10 +639,26 @@ public class RouterActivity extends AppCompatActivity {
 
     @SuppressLint("CheckResult")
     private void openDownloadDialog() {
+        // Restricted Mode: also refuse a download that arrives through a stale intent or a choice
+        // remembered from an earlier (unrestricted) run.
+        if (RestrictedChannelAccess.isRestricted(this)) {
+            RestrictedChannelAccess.notifyBlocked(this, R.string.restricted_mode_downloads_blocked);
+            finish();
+            return;
+        }
         disposables.add(ExtractorHelper.getStreamInfo(currentServiceId, currentUrl, true)
                 .subscribeOn(Schedulers.io())
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(result -> {
+                    // Restricted Mode: downloading hands out the video file, so it is authorized on
+                    // the resolved stream exactly like playback is.
+                    if (!RestrictedChannelAccess.isSubscribedBlocking(this,
+                            result.getServiceId(), result.getUploaderUrl())) {
+                        RestrictedChannelAccess.notifyVideoBlocked(this);
+                        finish();
+                        return;
+                    }
+
                     if (StreamTypeUtil.isLiveStream(result.getStreamType())) {
                         Toast.makeText(this, R.string.no_streams_available_download,
                                 Toast.LENGTH_LONG).show();

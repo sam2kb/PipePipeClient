@@ -402,6 +402,15 @@ public final class Player {
     public void handleIntent(@NonNull final Intent intent) {
         startController.handleIntent(intent);
     }
+
+    /**
+     * Whether Restricted Mode refused the play queue of the last handled intent.
+     *
+     * @return true if the last handled intent was dropped by Restricted Mode
+     */
+    public boolean wasLastIntentRefusedForRestrictedMode() {
+        return startController.getRefusedForRestrictedMode();
+    }
     //endregion
 
 

@@ -34,6 +34,7 @@ import org.schabi.newpipe.fragments.OnScrollBelowItemsListener;
 import org.schabi.newpipe.info_list.ItemViewMode;
 import org.schabi.newpipe.info_list.dialog.InfoItemDialog;
 import org.schabi.newpipe.info_list.InfoListAdapter;
+import org.schabi.newpipe.restricted.RestrictedChannelAccess;
 import org.schabi.newpipe.util.NavigationHelper;
 import org.schabi.newpipe.util.OnClickGesture;
 import org.schabi.newpipe.util.StateSaver;
@@ -287,6 +288,14 @@ public abstract class BaseListFragment<I, N> extends BaseStateFragment<I>
                                 Toast.LENGTH_SHORT).show();
                         return;
                     }
+                    // Restricted Mode: same idea as the block list above, extended to the
+                    // subscription allowlist. NavigationHelper repeats the check, and
+                    // ChannelFragment repeats it again on the resolved ChannelInfo.
+                    if (!RestrictedChannelAccess.isSubscribedBlocking(requireContext(),
+                            selectedItem.getServiceId(), selectedItem.getUrl())) {
+                        RestrictedChannelAccess.notifyChannelBlocked(requireContext());
+                        return;
+                    }
                     onItemSelected(selectedItem);
                     NavigationHelper.openChannelFragment(getFM(),
                             selectedItem.getServiceId(),
@@ -309,6 +318,8 @@ public abstract class BaseListFragment<I, N> extends BaseStateFragment<I>
                                 Toast.LENGTH_SHORT).show();
                         return;
                     }
+                    // Restricted Mode deliberately does NOT block the playlist page here: a
+                    // PlaylistInfoItem carries no uploader URL, and authorizing on the uploader
                     onItemSelected(selectedItem);
                     NavigationHelper.openPlaylistFragment(getFM(),
                             selectedItem.getServiceId(),

@@ -1118,4 +1118,14 @@
 <string name="minimize_gesture_non_fullscreen_description">Outside fullscreen only</string>
 <string name="minimize_gesture_fullscreen_description">In and outside fullscreen (disables the fullscreen and playback speed swipe gestures)</string>
 <string name="delete_filter_confirm">Do you want to delete \"%s\" from the filter list?</string>
+<!-- Restricted Mode (subscriptions-only, controlled by the .subscriptions_only.lock sentinel) -->
+<string name="restricted_mode_video_blocked">This video is not from a subscribed channel.</string>
+<string name="restricted_mode_channel_blocked">This channel is not subscribed.</string>
+<string name="restricted_mode_search_blocked">Search is disabled in Restricted Mode.</string>
+<string name="restricted_mode_results_filtered">Showing results from your subscribed channels only.</string>
+<string name="restricted_mode_subscriptions_read_only">Subscriptions are read-only in Restricted Mode.</string>
+<string name="restricted_mode_status_title">Restricted Mode: ON</string>
+<string name="restricted_mode_status_summary">Only channels in the subscription list can be opened or played. Search results and related videos are limited to those channels, and subscription changes are disabled. The mode is controlled by the administrator through the .subscriptions_only.lock file.</string>
+<string name="restricted_mode_playlist_empty">No playable videos: none of the channels in this queue are subscribed.</string>
+<string name="restricted_mode_downloads_blocked">Downloads are disabled in Restricted Mode.</string>
 </resources>

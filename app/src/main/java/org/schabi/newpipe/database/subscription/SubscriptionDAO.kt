@@ -8,6 +8,7 @@ import androidx.room.RewriteQueriesToDropUnusedColumns
 import androidx.room.Transaction
 import io.reactivex.rxjava3.core.Flowable
 import io.reactivex.rxjava3.core.Maybe
+import io.reactivex.rxjava3.core.Single
 import org.schabi.newpipe.database.BasicDAO
 
 @Dao
@@ -110,6 +111,34 @@ abstract class SubscriptionDAO : BasicDAO<SubscriptionEntity> {
 
     @Query("SELECT * FROM subscriptions WHERE url LIKE :url AND service_id = :serviceId")
     abstract fun getSubscription(serviceId: Int, url: String): Maybe<SubscriptionEntity>
+
+    /**
+     * Restricted Mode authorization primitive: exact, index-backed lookup of one channel.
+     */
+    @Query(
+        """
+        SELECT EXISTS(
+            SELECT 1
+            FROM subscriptions
+            WHERE service_id = :serviceId
+            AND url = :channelUrl
+        )
+        """
+    )
+    abstract fun isSubscribed(serviceId: Int, channelUrl: String): Single<Boolean>
+
+    /**
+     * Every subscribed channel URL of one service.
+     */
+    @Query("SELECT url FROM subscriptions WHERE service_id = :serviceId")
+    abstract fun subscriptionUrlsByService(serviceId: Int): Single<List<String>>
+
+    /**
+     * Every subscribed channel name of one service. Restricted Mode uses it as a fallback
+     * when a service result identifies a channel by handle instead of by channel ID.
+     */
+    @Query("SELECT name FROM subscriptions WHERE service_id = :serviceId")
+    abstract fun subscriptionNamesByService(serviceId: Int): Single<List<String>>
 
     @Query("SELECT * FROM subscriptions WHERE uid = :subscriptionId")
     abstract fun getSubscription(subscriptionId: Long): SubscriptionEntity

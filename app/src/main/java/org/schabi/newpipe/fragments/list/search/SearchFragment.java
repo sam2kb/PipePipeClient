@@ -65,6 +65,7 @@ import org.schabi.newpipe.fragments.list.search.filter.SearchFilterUI;
 import org.schabi.newpipe.ktx.AnimationType;
 import org.schabi.newpipe.ktx.ExceptionUtils;
 import org.schabi.newpipe.local.history.HistoryRecordManager;
+import org.schabi.newpipe.restricted.RestrictedChannelAccess;
 import org.schabi.newpipe.settings.NewPipeSettings;
 import org.schabi.newpipe.util.Constants;
 import org.schabi.newpipe.util.DeviceUtils;
@@ -115,6 +116,12 @@ public class SearchFragment extends BaseListFragment<SearchInfo, ListExtractor.I
      * to fetch/show the suggestions, in milliseconds.
      */
     private static final int SUGGESTIONS_DEBOUNCE = 120; //ms
+
+    /**
+     * How many further pages a Restricted Mode search fetches on its own when the pages it
+     * has seen contained nothing but channels outside the subscription list.
+     */
+    private static final int RESTRICTED_AUTO_PAGE_BUDGET = 4;
     private final PublishSubject<String> suggestionPublisher = PublishSubject.create();
 
     protected int serviceId = Constants.NO_SERVICE_ID;
@@ -136,6 +143,7 @@ public class SearchFragment extends BaseListFragment<SearchInfo, ListExtractor.I
     String searchSuggestion;
 
     boolean isCorrectedSearch;
+    private int restrictedAutoPagesLeft;
 
     MetaInfo[] metaInfo;
 
@@ -321,8 +329,24 @@ public class SearchFragment extends BaseListFragment<SearchInfo, ListExtractor.I
     public void onViewCreated(@NonNull final View rootView, final Bundle savedInstanceState) {
         searchBinding = FragmentSearchBinding.bind(rootView);
         super.onViewCreated(rootView, savedInstanceState);
+
+        // Normal view initialisation always runs: searchEditText, searchClear, searchFilter,
+        // searchSubmit and the suggestion list are set up here and are dereferenced again by
+        // onPause() and onDestroyView(). Refusing before it made the refusal itself crash while the
+        // fragment was being torn down.
         showSearchOnStart();
         initSearchListeners();
+
+        // Restricted Mode: this is the fragment-level guard, so that no code path — a menu item, a
+        // navigation helper, an intent or a future caller — can open service-wide search. A
+        // channel-local search is allowed only for a channel that is subscribed.
+        if (!isAllowedByRestrictedMode()) {
+            RestrictedChannelAccess.notifySearchBlocked(requireContext());
+            if (getParentFragmentManager().getBackStackEntryCount() > 0) {
+                getParentFragmentManager().popBackStack();
+            }
+            return;
+        }
 
         if (!TextUtils.isEmpty(searchString) && infoListAdapter.getItemsList().isEmpty()) {
             searchEditText.setText(searchString);
@@ -983,9 +1007,67 @@ public class SearchFragment extends BaseListFragment<SearchInfo, ListExtractor.I
         search(searchEditText.getText().toString());
     }
 
+    /**
+     * @return whether Restricted Mode allows this search fragment instance to run. Service-wide
+     *         search is allowed, but every result page is filtered to subscribed channels (see
+     *         {@link #allowedRestrictedItems(List)}); channel-local search additionally requires
+     *         the channel itself to be subscribed.
+     */
+    private boolean isAllowedByRestrictedMode() {
+        if (!RestrictedChannelAccess.isRestricted(requireContext())) {
+            return true;
+        }
+        if (!channelSearchMode) {
+            return true;
+        }
+        return RestrictedChannelAccess.isSubscribedBlocking(
+                requireContext(), serviceId, channelUrl);
+    }
+
+    /**
+     * Restricted Mode: a search query runs against the whole service, so the pages it returns
+     * can contain channels the administrator did not approve.
+     *
+     * @param items the page's items
+     * @return the entries that may be listed, in their original order
+     */
+    private List<InfoItem> allowedRestrictedItems(
+            @NonNull final List<? extends InfoItem> items) {
+        if (items.isEmpty() || !RestrictedChannelAccess.isRestricted(getContext())) {
+            return new ArrayList<>(items);
+        }
+        final List<InfoItem> allowed = RestrictedChannelAccess.allowedItems(
+                getContext(), serviceId, items);
+        if (allowed.size() != items.size()) {
+            RestrictedChannelAccess.notifyResultsFiltered(getContext());
+        }
+        return allowed;
+    }
+
+    /**
+     * Restricted Mode: a page of a service-wide search can consist entirely of channels that
+     * are not subscribed.
+     *
+     * @return whether another page was requested
+     */
+    private boolean loadNextRestrictedPage() {
+        if (!RestrictedChannelAccess.isRestricted(getContext())
+                || restrictedAutoPagesLeft <= 0
+                || !Page.isValid(nextPage)) {
+            return false;
+        }
+        restrictedAutoPagesLeft--;
+        itemsList.postDelayed(this::loadMoreItems, 150);
+        return true;
+    }
+
     private void search(final String theSearchString) {
         if (DEBUG) {
             Log.d(TAG, "search() called with: query = [" + theSearchString + "]");
+        }
+        if (!isAllowedByRestrictedMode()) {
+            RestrictedChannelAccess.notifySearchBlocked(requireContext());
+            return;
         }
         if (theSearchString.isEmpty()) {
             return;
@@ -1011,6 +1093,7 @@ public class SearchFragment extends BaseListFragment<SearchInfo, ListExtractor.I
         }
 
         lastSearchedString = this.searchString;
+        restrictedAutoPagesLeft = RESTRICTED_AUTO_PAGE_BUDGET;
         this.searchString = theSearchString;
         infoListAdapter.clearStreamItemList();
         hideSuggestionsPanel();
@@ -1450,9 +1533,10 @@ public class SearchFragment extends BaseListFragment<SearchInfo, ListExtractor.I
         nextPage = result.getNextPage();
         hideLoading();
 
+        final List<InfoItem> items = allowedRestrictedItems(result.getRelatedItems());
         if (infoListAdapter.getItemsList().isEmpty()) {
-            if (!result.getRelatedItems().isEmpty()) {
-                infoListAdapter.addInfoItemList(result.getRelatedItems());
+            if (!items.isEmpty()) {
+                infoListAdapter.addInfoItemList(items);
                 showListFooter(hasMoreItems());
             } else {
                 infoListAdapter.clearStreamItemList();
@@ -1484,9 +1568,15 @@ public class SearchFragment extends BaseListFragment<SearchInfo, ListExtractor.I
         lastSearchedString = searchString;
         nextPage = result.getNextPage();
 
+        result.setRelatedItems(allowedRestrictedItems(result.getRelatedItems()));
         if (infoListAdapter.getItemsList().isEmpty()) {
             if (!result.getRelatedItems().isEmpty()) {
                 infoListAdapter.addInfoItemList(result.getRelatedItems());
+            } else if (loadNextRestrictedPage()) {
+                // The page held nothing that may be listed and more pages are on their way: close
+                // the loading state, but do not claim that there are no results.
+                super.handleResult(result);
+                return;
             } else {
                 infoListAdapter.clearStreamItemList();
                 showEmptyState();
@@ -1531,7 +1621,8 @@ public class SearchFragment extends BaseListFragment<SearchInfo, ListExtractor.I
     @Override
     public void handleNextItems(final ListExtractor.InfoItemsPage<?> result) {
         showListFooter(false);
-        infoListAdapter.addInfoItemList(result.getItems());
+        final List<InfoItem> moreItems = allowedRestrictedItems(result.getItems());
+        infoListAdapter.addInfoItemList(moreItems);
         nextPage = result.getNextPage();
 
         if (!result.getErrors().isEmpty()) {
@@ -1542,6 +1633,11 @@ public class SearchFragment extends BaseListFragment<SearchInfo, ListExtractor.I
                     serviceId));
         }
         super.handleNextItems(result);
+
+        if (infoListAdapter.getItemsList().isEmpty() && loadNextRestrictedPage()) {
+            // Keep the footer spinner while the next page is on its way.
+            showListFooter(true);
+        }
     }
 
     @Override

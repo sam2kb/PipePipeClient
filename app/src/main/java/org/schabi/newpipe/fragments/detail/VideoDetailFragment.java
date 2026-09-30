@@ -77,6 +77,7 @@ import org.schabi.newpipe.fragments.EmptyFragment;
 import org.schabi.newpipe.fragments.list.comments.CommentReplyFragment;
 import org.schabi.newpipe.fragments.list.comments.CommentsFragment;
 import org.schabi.newpipe.fragments.list.comments.CommentsFragmentContainer;
+import org.schabi.newpipe.restricted.CommentsModeManager;
 import org.schabi.newpipe.fragments.list.sponsorblock.SponsorBlockFragment;
 import org.schabi.newpipe.fragments.list.sponsorblock.SponsorBlockFragmentListener;
 import org.schabi.newpipe.fragments.list.videos.RelatedItemsFragment;
@@ -99,6 +100,9 @@ import org.schabi.newpipe.player.helper.PlayerHolder;
 import org.schabi.newpipe.player.mediasession.PlayerServiceInterface;
 import org.schabi.newpipe.player.mediaitem.PlayerMediaItem;
 import org.schabi.newpipe.player.playqueue.PlayQueue;
+import org.schabi.newpipe.restricted.RestrictedChannelAccess;
+import org.schabi.newpipe.restricted.RestrictedModeException;
+import org.schabi.newpipe.restricted.RestrictedQueueFilter;
 import org.schabi.newpipe.player.playqueue.SinglePlayQueue;
 import org.schabi.newpipe.sleep.SleepTimerService;
 import org.schabi.newpipe.util.*;
@@ -544,17 +548,24 @@ public final class VideoDetailFragment
                 );
             }
         } else if (id == R.id.detail_controls_download) {
-            if (PermissionHelper.checkStoragePermissions(activity,
+            // Restricted Mode: a download would end up in a library that cannot be authorized per
+            // channel, and that library hands its files to an external player.
+            if (!RestrictedChannelAccess.isRestricted(getContext())
+                    && PermissionHelper.checkStoragePermissions(activity,
                     PermissionHelper.DOWNLOAD_DIALOG_REQUEST_CODE)) {
                 this.openDownloadDialog();
             }
         } else if (id == R.id.detail_controls_share) {
-            if (currentInfo != null) {
+            // Restricted Mode: no sharing a link out of a locked-down client.
+            if (currentInfo != null
+                    && !RestrictedChannelAccess.isRestricted(getContext())) {
                 ShareUtils.shareText(requireContext(), currentInfo.getName(),
                         currentInfo.getUrl(), currentInfo.getThumbnailUrl());
             }
         } else if (id == R.id.detail_controls_open_in_browser) {
-            if (currentInfo != null) {
+            // Restricted Mode: never hand the stream over to a browser.
+            if (currentInfo != null
+                    && !RestrictedChannelAccess.isRestricted(getContext())) {
                 ShareUtils.openUrlInBrowser(requireContext(), currentInfo.getUrl());
             }
         } else if (id == R.id.detail_controls_start_sleep_timer) {
@@ -672,7 +683,9 @@ public final class VideoDetailFragment
         } else if (id == R.id.detail_toggle_secondary_controls_view) {
             hideTitleAndSecondaryControls();
         } else if (id == R.id.detail_controls_playlist_append) {
-            if (getFM() != null && currentInfo != null) {
+            // Restricted Mode: the related items are not a discovery surface here either.
+            if (getFM() != null && currentInfo != null
+                    && !RestrictedChannelAccess.isRestricted(getContext())) {
                 disposables.add(
                         PlaylistDialog.createCorrespondingDialog(
                                 getContext(),
@@ -1062,6 +1075,28 @@ public final class VideoDetailFragment
                 .observeOn(AndroidSchedulers.mainThread())
                 .subscribe(result -> {
                     isLoading.set(false);
+
+                    // Restricted Mode, authoritative check for the video detail page. It runs on
+                    // the *resolved* StreamInfo, so history entries, bookmarks, local and remote
+                    // playlists, shared/pasted URLs, intents, description and comment links all
+                    // end up here and none of them can dodge it by supplying a different URL.
+                    if (!RestrictedChannelAccess.isSubscribedBlocking(
+                            getContext(), result.getServiceId(), result.getUploaderUrl())) {
+                        if (DEBUG) {
+                            Log.i(TAG, "Restricted Mode denied stream " + result.getUrl()
+                                    + " (uploader=" + result.getUploaderUrl() + ")");
+                        }
+                        RestrictedChannelAccess.notifyVideoBlocked(getContext());
+                        playQueue = null;
+                        stack.clear();
+                        showError(new ErrorInfo(
+                                new RestrictedModeException(
+                                        "This video is not from a subscribed channel."),
+                                UserAction.REQUESTED_STREAM,
+                                url == null ? "no url" : url, serviceId));
+                        return;
+                    }
+
                     hideMainPlayerOnLoadingNewStream();
                     handleResult(result);
                     showContent();
@@ -1169,7 +1204,8 @@ public final class VideoDetailFragment
     }
 
     private void updateTabs(@NonNull final StreamInfo info) {
-        if (info.isRoundPlayStream() || (showRelatedItems && info.isSupportRelatedItems())) {
+        if (info.isRoundPlayStream()
+                || (showRelatedItems && info.isSupportRelatedItems())) {
             try {
                 if (binding.relatedItemsLayout == null) { // phone
                     pageAdapter.updateItem(RELATED_TAB_TAG, RelatedItemsFragment.getInstance(info));
@@ -1270,13 +1306,20 @@ public final class VideoDetailFragment
     }
 
     private Set<String> getVideoTabs(final SharedPreferences sharedPreferences) {
-        return sharedPreferences.getStringSet(getString(R.string.video_tabs_key),
+        final Set<String> tabs = new HashSet<>(sharedPreferences.getStringSet(
+                getString(R.string.video_tabs_key),
                 new HashSet<>(Arrays.asList(
                         VIDEO_TAB_COMMENTS,
                         VIDEO_TAB_RELATED,
                         VIDEO_TAB_SPONSORBLOCK,
                         VIDEO_TAB_DESCRIPTION
-                )));
+                ))));
+        // Restricted Mode: the tab stays available; RelatedItemsFragment drops the entries whose
+        // channel is not subscribed, so the list cannot lead outside the subscription list.
+        if (CommentsModeManager.isEnabled(getContext())) {
+            tabs.remove(VIDEO_TAB_COMMENTS);
+        }
+        return tabs;
     }
 
     public void updateTabLayoutVisibility() {
@@ -1436,6 +1479,12 @@ public final class VideoDetailFragment
         }
 
         final PlayQueue queue = setupPlayQueueForIntent(false);
+        // Restricted Mode: do not even start the player service when nothing in the queue is
+        // authorized. (When restricted, currentInfo itself is only ever set for an authorized
+        // stream, so this is a second, cheap guarantee.)
+        if (RestrictedQueueFilter.sanitized(getContext(), queue) == null) {
+            return;
+        }
         PlaybackStartupTrace.mark(pendingStartupTraceId, "play_queue_ready");
 
         // Video view can have elements visible from popup,
@@ -1992,6 +2041,11 @@ public final class VideoDetailFragment
     }
 
     public void openDownloadDialog() {
+        if (RestrictedChannelAccess.isRestricted(getContext())) {
+            RestrictedChannelAccess.notifyBlocked(getContext(),
+                    R.string.restricted_mode_downloads_blocked);
+            return;
+        }
         if (currentInfo == null) {
             return;
         }
@@ -2420,9 +2474,11 @@ public final class VideoDetailFragment
         }
         final AlertDialog.Builder builder = new AlertDialog.Builder(activity)
                 .setNegativeButton(R.string.cancel, null)
-                .setNeutralButton(R.string.open_in_browser, (dialog, i) ->
-                        ShareUtils.openUrlInBrowser(requireActivity(), url)
-                );
+                .setNeutralButton(R.string.open_in_browser, (dialog, i) -> {
+                    if (!RestrictedChannelAccess.isRestricted(getContext())) {
+                        ShareUtils.openUrlInBrowser(requireActivity(), url);
+                    }
+                });
         // Maybe there are no video streams available, show just `open in browser` button
         if (resolutions.length > 0) {
             builder.setSingleChoiceItems(resolutions, selectedVideoStreamIndex, (dialog, i) -> {

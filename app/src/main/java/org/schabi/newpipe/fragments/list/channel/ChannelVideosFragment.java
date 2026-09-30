@@ -52,6 +52,8 @@ import org.schabi.newpipe.fragments.list.BaseListInfoFragment;
 import org.schabi.newpipe.ktx.AnimationType;
 import org.schabi.newpipe.local.feed.notifications.NotificationHelper;
 import org.schabi.newpipe.local.subscription.SubscriptionManager;
+import org.schabi.newpipe.restricted.RestrictedChannelAccess;
+import org.schabi.newpipe.restricted.RestrictedModeException;
 import org.schabi.newpipe.local.subscription.dialog.FeedGroupSelectionDialog;
 import org.schabi.newpipe.player.PlayerService.PlayerType;
 import org.schabi.newpipe.player.playqueue.ChannelPlayQueue;
@@ -277,6 +279,12 @@ public class ChannelVideosFragment extends BaseListInfoFragment<StreamInfoItem, 
     private Function<Object, Object> mapOnSubscribe(final SubscriptionEntity subscription,
                                                     final ChannelInfo info) {
         return (@NonNull Object o) -> {
+            // Restricted Mode: never create a subscription row; this is the production entry point
+            // of the subscribe button.
+            if (RestrictedChannelAccess.isRestricted(activity)) {
+                RestrictedChannelAccess.notifySubscriptionsReadOnly(activity);
+                return o;
+            }
             subscriptionManager.insertSubscription(subscription, info);
             return o;
         };
@@ -284,6 +292,11 @@ public class ChannelVideosFragment extends BaseListInfoFragment<StreamInfoItem, 
 
     private Function<Object, Object> mapOnUnsubscribe(final SubscriptionEntity subscription) {
         return (@NonNull Object o) -> {
+            // Restricted Mode keeps the allowlist read-only.
+            if (RestrictedChannelAccess.isRestricted(activity)) {
+                RestrictedChannelAccess.notifySubscriptionsReadOnly(activity);
+                return o;
+            }
             subscriptionManager.deleteSubscription(subscription);
             return o;
         };
@@ -370,6 +383,14 @@ public class ChannelVideosFragment extends BaseListInfoFragment<StreamInfoItem, 
                     + "isSubscribed = [" + isSubscribed + "]");
         }
 
+        // Restricted Mode: the subscribe/unsubscribe control is not offered at all. The
+        // subscription manager refuses the mutation as well, so this is only the visible part.
+        if (RestrictedChannelAccess.isRestricted(activity)) {
+            headerBinding.channelSubscribeButton.setVisibility(View.GONE);
+            updateAddToGroupButton(false);
+            return;
+        }
+
         final boolean isButtonVisible = headerBinding.channelSubscribeButton.getVisibility()
                 == View.VISIBLE;
         final int backgroundDuration = isButtonVisible ? 300 : 0;
@@ -443,6 +464,13 @@ public class ChannelVideosFragment extends BaseListInfoFragment<StreamInfoItem, 
 
     @Override
     protected Single<ChannelInfo> loadResult(final boolean forceLoad) {
+        // Restricted Mode, data-layer guard for channel content. It also covers the case of a
+        // "Channel" main tab that was pinned before the mode was switched on: that tab builds this
+        // fragment directly, without going through ChannelFragment.
+        if (!RestrictedChannelAccess.isSubscribedBlocking(requireContext(), serviceId, url)) {
+            return Single.error(new RestrictedModeException("This channel is not subscribed."));
+        }
+
         if (selectedSortFilterId == Filter.ITEM_IDENTIFIER_UNKNOWN) {
             return ExtractorHelper.getChannelInfo(serviceId, url, forceLoad);
         }

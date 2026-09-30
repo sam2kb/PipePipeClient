@@ -115,6 +115,8 @@ public class ChannelTabFragment extends BaseListInfoFragment<InfoItem, ChannelTa
             return Single.error(new IllegalStateException(
                     "The channel tab link handler could not be restored"));
         }
+        // Restricted Mode deliberately checks nothing here. A tab URL is the channel URL plus a
+        // service-specific suffix (PeerTube: "/video-channels/name/videos"), so authorizing on it
         return ExtractorHelper.getChannelTab(serviceId, tabHandler, forceLoad);
     }
 

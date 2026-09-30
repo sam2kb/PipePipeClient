@@ -18,6 +18,7 @@ import org.schabi.newpipe.extractor.exceptions.WebViewUnavailableException
 import org.schabi.newpipe.extractor.services.youtube.extractors.YoutubeStreamExtractor.DeobfuscateException
 import org.schabi.newpipe.ktx.isNetworkRelated
 import org.schabi.newpipe.player.PlayerError
+import org.schabi.newpipe.restricted.RestrictedModeException
 import java.io.PrintWriter
 import java.io.StringWriter
 import kotlin.math.min
@@ -83,6 +84,23 @@ class ErrorInfo(
         this(throwable, userAction, getInfoServiceName(info), request)
 
     companion object {
+
+        /** @return whether the refusal is this throwable or anywhere in its cause chain. */
+        private fun Throwable.isRestrictedModeRefusal(): Boolean {
+            var current: Throwable? = this
+            var depth = 0
+            while (current != null && depth < MAX_CAUSE_DEPTH) {
+                if (current is RestrictedModeException) {
+                    return true
+                }
+                current = current.cause
+                depth++
+            }
+            return false
+        }
+
+        private const val MAX_CAUSE_DEPTH = 10
+
         const val SERVICE_NONE = "none"
 
         private fun getStackTrace(throwable: Throwable): String {
@@ -114,7 +132,14 @@ class ErrorInfo(
             throwable: Throwable?,
             action: UserAction
         ): Int {
+            // A Restricted Mode refusal can also arrive wrapped: the player turns a refused media
+            // source into a PlayerError whose cause is the refusal.
+            if (throwable != null && throwable.isRestrictedModeRefusal()) {
+                return R.string.restricted_mode_video_blocked
+            }
             return when {
+                // Restricted Mode refusals get their own message instead of "general error".
+                throwable is RestrictedModeException -> R.string.restricted_mode_video_blocked
                 throwable is AccountTerminatedException -> R.string.account_terminated
                 throwable is ContentNotAvailableException -> R.string.content_not_available
                 throwable != null && throwable.isNetworkRelated -> R.string.network_error

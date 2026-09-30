@@ -18,12 +18,41 @@ import org.schabi.newpipe.extractor.stream.StreamInfoItem
 import org.schabi.newpipe.extractor.subscription.SubscriptionItem
 import org.schabi.newpipe.local.feed.FeedDatabaseManager
 import org.schabi.newpipe.local.feed.service.FeedUpdateInfo
+import org.schabi.newpipe.restricted.RestrictedChannelAccess
 import org.schabi.newpipe.util.ExtractorHelper
 
 class SubscriptionManager(context: Context) {
     private val database = NewPipeDatabase.getInstance(context)
     private val subscriptionTable = database.subscriptionDAO()
     private val feedDatabaseManager = FeedDatabaseManager(context)
+
+    /**
+     * Restricted Mode turns the subscription list into a read-only allowlist: it is the set of
+     * channels the administrator approved, so it must not be possible to widen it from inside
+     * the app.
+     */
+    private val appContext: Context = context.applicationContext
+
+    private fun restricted(): Boolean = RestrictedChannelAccess.isRestricted(appContext)
+
+    /**
+     * Keeps only the entries whose channel is already subscribed. Used by the bulk upsert, which
+     * is otherwise able to create brand new rows.
+     */
+    private fun onlyExisting(infoList: List<ChannelInfo>): List<ChannelInfo> {
+        if (!restricted()) {
+            return infoList
+        }
+        val allowed = HashSet<String>()
+        infoList.forEach { info ->
+            val existing = subscriptionTable.getSubscription(info.serviceId, info.url)
+                .blockingGet()
+            if (existing != null) {
+                allowed.add(info.url)
+            }
+        }
+        return infoList.filter { allowed.contains(it.url) }
+    }
 
     fun subscriptionTable(): SubscriptionDAO = subscriptionTable
     fun subscriptions() = subscriptionTable.all
@@ -53,12 +82,18 @@ class SubscriptionManager(context: Context) {
     }
 
     fun upsertAll(infoList: List<ChannelInfo>): List<SubscriptionEntity> {
+        // Restricted Mode: this method can create rows, so only already subscribed channels pass.
+        val effectiveList = onlyExisting(infoList)
+        if (effectiveList.isEmpty()) {
+            return emptyList()
+        }
+
         val listEntities = subscriptionTable.upsertAll(
-            infoList.map { SubscriptionEntity.from(it) }
+            effectiveList.map { SubscriptionEntity.from(it) }
         )
 
         database.runInTransaction {
-            infoList.forEachIndexed { index, info ->
+            effectiveList.forEachIndexed { index, info ->
                 feedDatabaseManager.upsertAll(listEntities[index].uid, info.relatedItems)
             }
         }
@@ -66,10 +101,17 @@ class SubscriptionManager(context: Context) {
         return listEntities
     }
 
-    fun insertAll(subscriptionItems: List<SubscriptionItem>): List<SubscriptionEntity> =
-        subscriptionTable.insertAllIgnoringExisting(
+    fun insertAll(subscriptionItems: List<SubscriptionItem>): List<SubscriptionEntity> {
+        // Restricted Mode: subscription imports are disabled, they would let a restricted user
+        // authorize new channels.
+        if (restricted()) {
+            RestrictedChannelAccess.notifySubscriptionsReadOnly(appContext)
+            return emptyList()
+        }
+        return subscriptionTable.insertAllIgnoringExisting(
             subscriptionItems.map { SubscriptionEntity.from(it) }
         )
+    }
 
     fun updateChannelInfo(subscriptionId: Long, info: ChannelInfo) {
         val subscriptionEntity = subscriptionTable.getSubscription(subscriptionId)
@@ -126,18 +168,33 @@ class SubscriptionManager(context: Context) {
     }
 
     fun deleteSubscription(serviceId: Int, url: String): Completable {
+        // Restricted Mode: the subscription list is read-only, so unsubscribing is refused too
+        // (it cannot widen access, but a locked-down list should not change at all).
+        if (restricted()) {
+            RestrictedChannelAccess.notifySubscriptionsReadOnly(appContext)
+            return Completable.complete()
+        }
         return Completable.fromCallable { subscriptionTable.deleteSubscription(serviceId, url) }
             .subscribeOn(Schedulers.io())
             .observeOn(AndroidSchedulers.mainThread())
     }
 
     fun deleteAllSubscriptions(): Completable {
+        if (restricted()) {
+            RestrictedChannelAccess.notifySubscriptionsReadOnly(appContext)
+            return Completable.complete()
+        }
         return Completable.fromAction { subscriptionTable.deleteAll() }
             .subscribeOn(Schedulers.io())
             .observeOn(AndroidSchedulers.mainThread())
     }
 
     fun insertSubscription(subscriptionEntity: SubscriptionEntity, info: ChannelInfo) {
+        // Restricted Mode: the single interactive subscribe entry point.
+        if (restricted()) {
+            RestrictedChannelAccess.notifySubscriptionsReadOnly(appContext)
+            return
+        }
         database.runInTransaction {
             val subscriptionId = subscriptionTable.insert(subscriptionEntity)
             feedDatabaseManager.upsertAll(subscriptionId, info.relatedItems)
@@ -145,6 +202,10 @@ class SubscriptionManager(context: Context) {
     }
 
     fun deleteSubscription(subscriptionEntity: SubscriptionEntity) {
+        if (restricted()) {
+            RestrictedChannelAccess.notifySubscriptionsReadOnly(appContext)
+            return
+        }
         subscriptionTable.delete(subscriptionEntity)
     }
 

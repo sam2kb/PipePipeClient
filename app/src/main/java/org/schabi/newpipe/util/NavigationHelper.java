@@ -59,6 +59,8 @@ import org.schabi.newpipe.player.helper.PlayerHelper;
 import org.schabi.newpipe.player.helper.PlayerHolder;
 import org.schabi.newpipe.player.mediaitem.PlayerMediaItem;
 import org.schabi.newpipe.player.playqueue.PlayQueue;
+import org.schabi.newpipe.restricted.RestrictedChannelAccess;
+import org.schabi.newpipe.restricted.RestrictedQueueFilter;
 import org.schabi.newpipe.settings.SettingsActivity;
 import org.schabi.newpipe.util.external_communication.ShareUtils;
 
@@ -85,8 +87,13 @@ public final class NavigationHelper {
                                              final boolean resumePlayback) {
         final Intent intent = new Intent(context, targetClazz);
 
-        if (playQueue != null) {
-            final String cacheKey = SerializedCache.getInstance().put(playQueue, PlayQueue.class);
+        // Restricted Mode, last line of defence before the queue is serialized into the service
+        // intent: whatever the caller built, only subscribed channels may reach the player. The
+        // authoritative check is repeated in the player itself (PlayerStartController and
+        // MediaSourceManager), because a queue can also arrive through a restored intent.
+        final PlayQueue allowedQueue = RestrictedQueueFilter.sanitized(context, playQueue);
+        if (allowedQueue != null) {
+            final String cacheKey = SerializedCache.getInstance().put(allowedQueue, PlayQueue.class);
             if (cacheKey != null) {
                 intent.putExtra(PlayerIntentConstants.PLAY_QUEUE_KEY, cacheKey);
             }
@@ -161,6 +168,10 @@ public final class NavigationHelper {
             return;
         }
 
+        if (RestrictedQueueFilter.sanitized(context, queue) == null) {
+            return;
+        }
+
         Toast.makeText(context, R.string.popup_playing_toast, Toast.LENGTH_SHORT).show();
 
         final Intent intent = getPlayerIntent(context, DeviceUtils.getPlayerServiceClass(), queue, resumePlayback);
@@ -171,6 +182,10 @@ public final class NavigationHelper {
     public static void playOnBackgroundPlayer(final Context context,
                                               final PlayQueue queue,
                                               final boolean resumePlayback) {
+        if (RestrictedQueueFilter.sanitized(context, queue) == null) {
+            return;
+        }
+
         Toast.makeText(context, R.string.background_player_playing_toast, Toast.LENGTH_SHORT)
                 .show();
 
@@ -182,6 +197,12 @@ public final class NavigationHelper {
     public static void playOnBackgroundPlayerShuffled(final Context context,
                                                       final PlayQueue queue,
                                                       final boolean resumePlayback) {
+        // Shuffle only the entries that survived the Restricted Mode filter, so that the shuffled
+        // index can never point at a rejected entry.
+        if (RestrictedQueueFilter.sanitized(context, queue) == null) {
+            return;
+        }
+
         Toast.makeText(context, R.string.background_player_playing_toast, Toast.LENGTH_SHORT)
                 .show();
         queue.setIndex(new Random().nextInt(queue.getStreams().size()));
@@ -198,6 +219,10 @@ public final class NavigationHelper {
                                        final PlayerType playerType) {
         if ((playerType == PlayerType.POPUP) && !PermissionHelper.isPopupEnabled(context)) {
             PermissionHelper.showPopupEnablementToast(context);
+            return;
+        }
+
+        if (RestrictedQueueFilter.sanitized(context, queue) == null) {
             return;
         }
 
@@ -225,6 +250,11 @@ public final class NavigationHelper {
             Log.e(TAG, "Enqueueing next but no player is open; defaulting to background player");
             playerType = PlayerService.PlayerType.AUDIO;
         }
+
+        if (RestrictedQueueFilter.sanitized(context, queue) == null) {
+            return;
+        }
+
         Toast.makeText(context, R.string.enqueued_next, Toast.LENGTH_SHORT).show();
         final Intent intent = getPlayerEnqueueNextIntent(context, DeviceUtils.getPlayerServiceClass(), queue);
 
@@ -238,6 +268,13 @@ public final class NavigationHelper {
 
     public static void playOnExternalAudioPlayer(@NonNull final Context context,
                                                  @NonNull final StreamInfo info) {
+        // Restricted Mode: no handing a stream over to another application, which would turn
+        // PipePipe into a gateway to unrestricted playback. The stream's own authorization has
+        // already run by the time this is reachable, this is the "no way out of the app" rule.
+        if (RestrictedChannelAccess.isRestricted(context)) {
+            return;
+        }
+
         final int index = ListHelper.getDefaultAudioFormat(context, info.getAudioStreams());
 
         if (index == -1) {
@@ -251,6 +288,10 @@ public final class NavigationHelper {
 
     public static void playOnExternalVideoPlayer(@NonNull final Context context,
                                                  @NonNull final StreamInfo info) {
+        if (RestrictedChannelAccess.isRestricted(context)) {
+            return;
+        }
+
         final ArrayList<VideoStream> videoStreamsList = new ArrayList<>(
                 ListHelper.getSortedStreamVideosList(context, info.getVideoStreams(), null, false,
                         false));
@@ -269,6 +310,10 @@ public final class NavigationHelper {
                                             @Nullable final String name,
                                             @Nullable final String artist,
                                             @NonNull final Stream stream) {
+        if (RestrictedChannelAccess.isRestricted(context)) {
+            return;
+        }
+
         final Intent intent = new Intent();
         intent.setAction(Intent.ACTION_VIEW);
         intent.setDataAndType(Uri.parse(stream.getUrl()), stream.getFormat().getMimeType());
@@ -341,6 +386,9 @@ public final class NavigationHelper {
 
     public static void openSearchFragment(final FragmentManager fragmentManager,
                                           final int serviceId, final String searchString) {
+        // Restricted Mode: service-wide search is allowed as an entry point, but its results
+        // are filtered to subscribed channels in SearchFragment, so the reached content stays
+        // inside the subscription list.
         defaultTransaction(fragmentManager)
                 .replace(R.id.fragment_holder, SearchFragment.getInstance(serviceId, searchString))
                 .addToBackStack(SEARCH_FRAGMENT_TAG)
@@ -351,6 +399,13 @@ public final class NavigationHelper {
                                                  final int serviceId,
                                                  final String channelUrl,
                                                  final String channelName) {
+        // Channel-scoped search stays available, but only for a channel that already passed the
+        // subscribed-channel authorization: it cannot widen the reachable content universe.
+        if (!RestrictedChannelAccess.isSubscribedBlocking(null, serviceId, channelUrl)) {
+            RestrictedChannelAccess.notifyChannelBlocked(null);
+            return;
+        }
+
         defaultTransaction(fragmentManager)
                 .replace(R.id.fragment_holder,
                         SearchFragment.getChannelInstance(serviceId, channelUrl, channelName))
@@ -386,6 +441,11 @@ public final class NavigationHelper {
                                                @Nullable final PlayQueue playQueue,
                                                final boolean switchingPlayers) {
 
+        // Restricted Mode: the queue is filtered before it can reach the player fragment. The
+        // authoritative check is the StreamInfo authorization inside VideoDetailFragment, which
+        // this sanitization cannot replace (the fragment can also be opened without a queue).
+        final PlayQueue allowedQueue = RestrictedQueueFilter.sanitized(context, playQueue);
+
         final boolean autoPlay;
         @Nullable final PlayerService.PlayerType playerType = PlayerHolder.getInstance().getType();
         if (!PlayerHolder.getInstance().isPlayerOpen()) {
@@ -413,7 +473,7 @@ public final class NavigationHelper {
                 detailFragment.openVideoPlayer(playerType == PlayerService.PlayerType.POPUP
                         || PlayerHelper.isStartMainPlayerFullscreenEnabled(context));
             } else if (loadVideo) {
-                detailFragment.selectAndLoadVideo(serviceId, url, title, playQueue);
+                detailFragment.selectAndLoadVideo(serviceId, url, title, allowedQueue);
             }
             detailFragment.scrollToTop();
         };
@@ -423,7 +483,7 @@ public final class NavigationHelper {
             onVideoDetailFragmentReady.run((VideoDetailFragment) fragment, true);
         } else {
             final VideoDetailFragment instance = VideoDetailFragment
-                    .getInstance(serviceId, url, title, playQueue);
+                    .getInstance(serviceId, url, title, allowedQueue);
             instance.setAutoPlay(autoPlay);
 
             defaultTransaction(fragmentManager)
@@ -436,6 +496,14 @@ public final class NavigationHelper {
     public static void openChannelFragment(final FragmentManager fragmentManager,
                                            final int serviceId, final String url,
                                            @NonNull final String name) {
+        // Restricted Mode: a channel page is only reachable for a subscribed channel. The check is
+        // repeated after ChannelInfo has been loaded, because the URL passed in here is caller
+        // supplied and must not be the final authorization decision.
+        if (!RestrictedChannelAccess.isSubscribedBlocking(null, serviceId, url)) {
+            RestrictedChannelAccess.notifyChannelBlocked(null);
+            return;
+        }
+
         defaultTransaction(fragmentManager)
                 .replace(R.id.fragment_holder, ChannelFragment.getInstance(serviceId, url, name))
                 .addToBackStack(null)
@@ -505,6 +573,11 @@ public final class NavigationHelper {
 
     public static void openKioskFragment(final FragmentManager fragmentManager, final int serviceId,
                                          final String kioskId) throws ExtractionException {
+        // Restricted Mode: kiosks (Trending, Popular, …) are service-wide discovery surfaces.
+        if (RestrictedChannelAccess.isRestricted(null)) {
+            return;
+        }
+
         defaultTransaction(fragmentManager)
                 .replace(R.id.fragment_holder, KioskFragment.getInstance(serviceId, kioskId))
                 .addToBackStack(null)
@@ -535,6 +608,13 @@ public final class NavigationHelper {
     public static void openSubscriptionsImportFragment(final FragmentManager fragmentManager,
                                                        final int fragmentHolderId,
                                                        final int serviceId) {
+        // Restricted Mode: importing subscriptions would let a locked-down user authorize new
+        // channels, so the import screen is not reachable either.
+        if (RestrictedChannelAccess.isRestricted(null)) {
+            RestrictedChannelAccess.notifySubscriptionsReadOnly(null);
+            return;
+        }
+
         defaultTransaction(fragmentManager)
                 .replace(fragmentHolderId, SubscriptionsImportFragment.getInstance(serviceId))
                 .addToBackStack(null)
@@ -547,6 +627,13 @@ public final class NavigationHelper {
 
     public static void openSearch(final Context context, final int serviceId,
                                   final String searchString) {
+        // Restricted Mode: the intent driven search entry (RouterActivity text share, hashtag
+        // links) is refused here as well as in SearchFragment.
+        if (RestrictedChannelAccess.isRestricted(context)) {
+            RestrictedChannelAccess.notifySearchBlocked(context);
+            return;
+        }
+
         final Intent mIntent = new Intent(context, MainActivity.class);
         mIntent.putExtra(Constants.KEY_SERVICE_ID, serviceId);
         mIntent.putExtra(Constants.KEY_SEARCH_STRING, searchString);
@@ -561,14 +648,19 @@ public final class NavigationHelper {
                                        @Nullable final PlayQueue playQueue,
                                        final boolean switchingPlayers) {
 
+        // Restricted Mode: never hand an unauthorized queue to the activity. The video itself is
+        // authorized again after its StreamInfo has been resolved, so a direct URL still cannot
+        // play here.
+        final PlayQueue allowedQueue = RestrictedQueueFilter.sanitized(context, playQueue);
+
         final Intent intent = getOpenIntent(context, url, serviceId,
                 StreamingService.LinkType.STREAM);
         intent.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         intent.putExtra(Constants.KEY_TITLE, title);
         intent.putExtra(VideoDetailFragment.KEY_SWITCHING_PLAYERS, switchingPlayers);
 
-        if (playQueue != null) {
-            final String cacheKey = SerializedCache.getInstance().put(playQueue, PlayQueue.class);
+        if (allowedQueue != null) {
+            final String cacheKey = SerializedCache.getInstance().put(allowedQueue, PlayQueue.class);
             if (cacheKey != null) {
                 intent.putExtra(PlayerIntentConstants.PLAY_QUEUE_KEY, cacheKey);
             }
@@ -621,6 +713,14 @@ public final class NavigationHelper {
     }
 
     public static void openDownloads(final Activity activity) {
+        // Restricted Mode: the download library is content that is not covered by the subscription
+        // allowlist (the download records carry no reliable channel identity), and opening one of
+        // its entries hands the local file to whatever application handles the mime type — an
+        // external-player route out of the locked client.
+        if (RestrictedChannelAccess.isRestricted(activity)) {
+            RestrictedChannelAccess.notifyBlocked(activity, R.string.restricted_mode_downloads_blocked);
+            return;
+        }
         if (PermissionHelper.checkStoragePermissions(
                 activity, PermissionHelper.DOWNLOADS_REQUEST_CODE)) {
             final Intent intent = new Intent(activity, DownloadActivity.class);
@@ -694,6 +794,10 @@ public final class NavigationHelper {
      * @param videoURL the url to the video
      */
     public static void playWithKore(final Context context, final Uri videoURL) {
+        if (RestrictedChannelAccess.isRestricted(context)) {
+            return;
+        }
+
         final Intent intent = new Intent(Intent.ACTION_VIEW);
         intent.setPackage(context.getString(R.string.kore_package));
         intent.setData(videoURL);

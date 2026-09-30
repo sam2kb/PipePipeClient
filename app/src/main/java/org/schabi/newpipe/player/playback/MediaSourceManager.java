@@ -13,6 +13,7 @@ import com.google.android.exoplayer2.source.MediaSource;
 import org.reactivestreams.Subscriber;
 import org.reactivestreams.Subscription;
 import org.schabi.newpipe.extractor.exceptions.ExtractionException;
+import org.schabi.newpipe.extractor.stream.StreamInfo;
 import org.schabi.newpipe.player.mediaitem.ExoMediaItems;
 import org.schabi.newpipe.player.mediaitem.ExtractorStreamInfoResolver;
 import org.schabi.newpipe.player.mediaitem.PlayerMediaItem;
@@ -26,6 +27,8 @@ import org.schabi.newpipe.player.playqueue.events.MoveEvent;
 import org.schabi.newpipe.player.playqueue.events.PlayQueueEvent;
 import org.schabi.newpipe.player.playqueue.events.RemoveEvent;
 import org.schabi.newpipe.player.playqueue.events.ReorderEvent;
+import org.schabi.newpipe.restricted.RestrictedChannelAccess;
+import org.schabi.newpipe.restricted.RestrictedModeException;
 import org.schabi.newpipe.util.ServiceHelper;
 
 import java.io.UnsupportedEncodingException;
@@ -434,7 +437,25 @@ public class MediaSourceManager {
     }
 
     private Single<ManagedMediaSource> getLoadedMediaSource(@NonNull final PlayerMediaItem stream) {
-        return streamInfoResolver.streamOf(stream).map(streamInfo -> {
+        // Restricted Mode, authoritative playback boundary.
+        //
+        return RestrictedChannelAccess
+                .canPlay(context, stream.getServiceId(), stream.getUploaderUrl())
+                .flatMap(allowed -> allowed
+                        ? streamInfoResolver.streamOf(stream)
+                        : Single.<StreamInfo>error(new RestrictedModeException(
+                                "This video is not from a subscribed channel.")))
+                // The queue entry's own metadata is a claim made by whoever built the queue; the
+                // resolved StreamInfo describes the video that is actually about to play. Both are
+                // authorized, so a stale or inconsistent queue entry cannot smuggle an
+                // unauthorized video past the check above.
+                .flatMap(streamInfo -> RestrictedChannelAccess
+                        .canPlayStream(context, streamInfo)
+                        .flatMap(infoAllowed -> infoAllowed
+                                ? Single.just(streamInfo)
+                                : Single.<StreamInfo>error(new RestrictedModeException(
+                                        "This video is not from a subscribed channel."))))
+                .map(streamInfo -> {
             final MediaSource source = playbackListener.sourceOf(stream, streamInfo);
             if (source == null || !ExoMediaItems.fromMediaItem(source.getMediaItem()).isPresent()) {
                 final String message = "Unable to resolve source from stream info. "
@@ -455,6 +476,12 @@ public class MediaSourceManager {
             // source-build failure (e.g. SABR probe / session creation), thrown by sourceOf. Both are
             // source errors: keep the real cause so the report says where it came from, and don't
             // auto-retry them as if they were transient (which would loop on a permanent failure).
+            if (throwable instanceof RestrictedModeException) {
+                Log.i(TAG, "Restricted Mode denied playback of url=[" + stream.getUrl()
+                        + "], uploaderUrl=[" + stream.getUploaderUrl() + "]");
+                RestrictedChannelAccess.notifyVideoBlocked(context);
+                return FailedMediaSource.of(stream, new StreamInfoLoadException(throwable));
+            }
             if (throwable instanceof ExtractionException
                     || throwable instanceof IllegalStateException) {
                 return FailedMediaSource.of(stream, new StreamInfoLoadException(throwable));

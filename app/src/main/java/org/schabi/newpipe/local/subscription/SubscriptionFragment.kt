@@ -32,6 +32,7 @@ import org.schabi.newpipe.local.subscription.item.*
 import org.schabi.newpipe.local.subscription.item.HeaderWithMenuItem.Companion.PAYLOAD_UPDATE_VISIBILITY_MENU_ITEM
 import org.schabi.newpipe.local.subscription.services.SubscriptionsExportService.EXPORT_COMPLETE_ACTION
 import org.schabi.newpipe.local.subscription.services.SubscriptionsImportService.IMPORT_COMPLETE_ACTION
+import org.schabi.newpipe.restricted.RestrictedChannelAccess
 import org.schabi.newpipe.util.NavigationHelper
 import org.schabi.newpipe.util.OnClickGesture
 import org.schabi.newpipe.util.ThemeHelper.getGridSpanCountChannels
@@ -217,11 +218,12 @@ class SubscriptionFragment : BaseStateFragment<SubscriptionState>() {
             groupAdapter.add(this)
         }
 
-        // Import/Export section
+        // Import/Export section.
+        //
         importExportItem = FeedImportExportItem(
-            { importExportHelper.importSubscriptions() },
-            { onImportFromServiceSelected(it) },
-            { importExportHelper.exportSubscriptions() },
+            { guardImportExport { importExportHelper.importSubscriptions() } },
+            { serviceId -> guardImportExport { onImportFromServiceSelected(serviceId) } },
+            { guardImportExport { importExportHelper.exportSubscriptions() } },
             importExportItemExpandedState ?: false,
             { query -> viewModel.updateSearchQuery(query) }
         )
@@ -230,6 +232,18 @@ class SubscriptionFragment : BaseStateFragment<SubscriptionState>() {
         // Subscriptions section
         subscriptionsSection.setPlaceholder(EmptyPlaceholderItem())
         subscriptionsSection.setHideWhenEmpty(true)
+    }
+
+    /**
+     * Runs [action] unless Restricted Mode is on, in which case the import/export UI only
+     * reports that the subscription list is read-only.
+     */
+    private fun guardImportExport(action: () -> Unit) {
+        if (RestrictedChannelAccess.isRestricted(requireContext())) {
+            RestrictedChannelAccess.notifySubscriptionsReadOnly(requireContext())
+        } else {
+            action()
+        }
     }
 
     private fun getFeedGroupLayoutPreference(): Boolean {

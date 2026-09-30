@@ -21,8 +21,10 @@ import org.schabi.newpipe.extractor.stream.StreamInfo;
 import org.schabi.newpipe.fragments.list.BaseListInfoFragment;
 import org.schabi.newpipe.info_list.ItemViewMode;
 import org.schabi.newpipe.ktx.ViewUtils;
+import org.schabi.newpipe.restricted.RestrictedChannelAccess;
 import org.schabi.newpipe.util.RelatedItemInfo;
 
+import java.util.List;
 import java.util.Queue;
 import java.util.function.Supplier;
 
@@ -109,6 +111,16 @@ public class RelatedItemsFragment extends BaseListInfoFragment<InfoItem, Related
 
     @Override
     public void handleResult(@NonNull final RelatedItemInfo result) {
+        // Restricted Mode: related videos are suggestions from the whole service, so drop the
+        // entries whose channel is not subscribed before the list is built.
+        final List<InfoItem> relatedItems = result.getRelatedItems();
+        final List<InfoItem> allowed = RestrictedChannelAccess.allowedItems(
+                requireContext(), serviceId, relatedItems);
+        if (allowed.size() != relatedItems.size()) {
+            RestrictedChannelAccess.notifyResultsFiltered(requireContext());
+            result.setRelatedItems(allowed);
+        }
+
         super.handleResult(result);
 
         if (headerBinding != null) {

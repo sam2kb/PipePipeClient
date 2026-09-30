@@ -33,6 +33,7 @@ import org.schabi.newpipe.fragments.BaseStateFragment;
 import org.schabi.newpipe.fragments.detail.TabAdapter;
 import org.schabi.newpipe.local.feed.notifications.NotificationHelper;
 import org.schabi.newpipe.local.subscription.SubscriptionManager;
+import org.schabi.newpipe.restricted.RestrictedChannelAccess;
 import org.schabi.newpipe.util.ChannelTabHelper;
 import org.schabi.newpipe.util.Constants;
 import org.schabi.newpipe.util.ExtractorHelper;
@@ -195,11 +196,14 @@ public class ChannelFragment extends BaseStateFragment<ChannelInfo>
             NavigationHelper.openSettings(requireContext());
         } else if (item.getItemId() == R.id.menu_item_search) {
             if (currentInfo != null) {
+                // getUrl() (the canonical channel URL) rather than getOriginalUrl(): Restricted
+                // Mode authorizes channel-local search on the canonical identity.
                 NavigationHelper.openChannelSearchFragment(getFM(),
-                        currentInfo.getServiceId(), currentInfo.getOriginalUrl(), name);
+                        currentInfo.getServiceId(), currentInfo.getUrl(), name);
             }
         } else if (item.getItemId() == R.id.menu_item_openInBrowser) {
-            if (currentInfo != null) {
+            // Restricted Mode: no leaving the app to watch content that was not authorized here.
+            if (currentInfo != null && !RestrictedChannelAccess.isRestricted(requireContext())) {
                 ShareUtils.openUrlInBrowser(requireContext(), currentInfo.getOriginalUrl());
             }
         } else if (item.getItemId() == R.id.menu_item_share) {
@@ -215,6 +219,8 @@ public class ChannelFragment extends BaseStateFragment<ChannelInfo>
 
     private void updateSearchButton() {
         if (menuSearchButton != null) {
+            // Restricted Mode keeps channel-local search, but only for a channel that passed the
+            // subscribed-channel check (which handleResult() has already enforced here).
             menuSearchButton.setVisible(currentInfo != null
                     && currentInfo.getServiceId() == ServiceList.YouTube.getServiceId());
         }
@@ -399,6 +405,18 @@ public class ChannelFragment extends BaseStateFragment<ChannelInfo>
     @Override
     public void handleResult(@NonNull final ChannelInfo result) {
         super.handleResult(result);
+
+        // Restricted Mode: the URL the caller supplied is not the authorization decision. This
+        // check runs again on the channel the extractor actually resolved, so a direct channel URL
+        // to a non-subscribed channel cannot be opened even if a navigation guard was bypassed.
+        if (!RestrictedChannelAccess.isSubscribedBlocking(requireContext(),
+                result.getServiceId(), result.getUrl())) {
+            RestrictedChannelAccess.notifyChannelBlocked(requireContext());
+            if (getParentFragmentManager().getBackStackEntryCount() > 0) {
+                getParentFragmentManager().popBackStack();
+            }
+            return;
+        }
 
         // Safety net: if the channel is in the block list, prevent access
         final String channelName = result.getName();

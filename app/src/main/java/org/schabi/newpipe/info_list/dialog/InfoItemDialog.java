@@ -27,6 +27,7 @@ import org.schabi.newpipe.extractor.InfoItem;
 import org.schabi.newpipe.extractor.stream.StreamInfoItem;
 import org.schabi.newpipe.extractor.stream.StreamType;
 import org.schabi.newpipe.player.helper.PlayerHolder;
+import org.schabi.newpipe.restricted.RestrictedChannelAccess;
 import org.schabi.newpipe.util.external_communication.KoreUtils;
 
 import java.util.ArrayList;
@@ -228,6 +229,14 @@ public final class InfoItemDialog {
          * @return the current {@link Builder} instance
          */
         public Builder addEntry(@NonNull final StreamDialogDefaultEntry entry) {
+            // Restricted Mode: entries that hand the stream over to another application are not
+            // offered at all, so that PipePipe cannot become a route to unrestricted playback.
+            if (RestrictedChannelAccess.isRestricted(context)
+                    && (entry == StreamDialogDefaultEntry.OPEN_IN_BROWSER
+                        || entry == StreamDialogDefaultEntry.PLAY_WITH_KODI
+                        || entry == StreamDialogDefaultEntry.SHARE)) {
+                return this;
+            }
             entries.add(entry.toStreamDialogEntry());
             return this;
         }

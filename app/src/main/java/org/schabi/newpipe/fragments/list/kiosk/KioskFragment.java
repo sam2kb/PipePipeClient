@@ -23,6 +23,8 @@ import org.schabi.newpipe.extractor.linkhandler.ListLinkHandlerFactory;
 import org.schabi.newpipe.extractor.localization.ContentCountry;
 import org.schabi.newpipe.extractor.stream.StreamInfoItem;
 import org.schabi.newpipe.fragments.list.BaseListInfoFragment;
+import org.schabi.newpipe.restricted.RestrictedChannelAccess;
+import org.schabi.newpipe.restricted.RestrictedModeException;
 import org.schabi.newpipe.util.ExtractorHelper;
 import org.schabi.newpipe.util.KioskTranslator;
 import org.schabi.newpipe.util.Localization;
@@ -152,6 +154,12 @@ public class KioskFragment extends BaseListInfoFragment<StreamInfoItem, KioskInf
 
     @Override
     public Single<KioskInfo> loadResult(final boolean forceReload) {
+        // Restricted Mode: a kiosk (Trending, Popular, …) is a service-wide discovery surface and
+        // is refused at the data layer, not only in the tab bar and the drawer.
+        if (RestrictedChannelAccess.isRestricted(requireContext())) {
+            return Single.error(new RestrictedModeException(
+                    "Kiosks are disabled in Restricted Mode"));
+        }
         contentCountry = Localization.getPreferredContentCountry(requireContext());
         return ExtractorHelper.getKioskInfo(serviceId, url, forceReload);
     }

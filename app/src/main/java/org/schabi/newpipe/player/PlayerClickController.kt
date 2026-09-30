@@ -17,6 +17,7 @@ import org.schabi.newpipe.ktx.AnimationType
 import org.schabi.newpipe.ktx.animate
 import org.schabi.newpipe.ktx.animateRotation
 import org.schabi.newpipe.local.dialog.PlaylistDialog
+import org.schabi.newpipe.restricted.RestrictedChannelAccess
 import org.schabi.newpipe.sleep.SleepTimerService
 import org.schabi.newpipe.util.NavigationHelper
 import org.schabi.newpipe.util.external_communication.KoreUtils
@@ -106,6 +107,10 @@ class PlayerClickController(private val player: Player) :
         } else if (v.id == binding.moreOptionsButton.id) {
             onMoreOptionsClicked()
         } else if (v.id == binding.share.id) {
+            // Restricted Mode: no sharing a link out of a locked-down client.
+            if (RestrictedChannelAccess.isRestricted(player.context)) {
+                return
+            }
             ShareUtils.shareText(
                 player.context, player.videoTitle, player.getVideoUrlAtCurrentTime(),
                 player.currentItem!!.thumbnailUrl
@@ -237,6 +242,10 @@ class PlayerClickController(private val player: Player) :
     }
 
     private fun onOpenInBrowserClicked() {
+        // Restricted Mode: never hand the stream over to a browser.
+        if (RestrictedChannelAccess.isRestricted(player.context)) {
+            return
+        }
         player.currentStreamInfo
             .map { info -> info.originalUrl }
             .ifPresent { originalUrl ->

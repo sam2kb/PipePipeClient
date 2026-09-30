@@ -17,6 +17,7 @@ import org.schabi.newpipe.extractor.comments.CommentsInfoItem;
 import org.schabi.newpipe.fragments.list.BaseListInfoFragment;
 import org.schabi.newpipe.info_list.ItemViewMode;
 import org.schabi.newpipe.ktx.ViewUtils;
+import org.schabi.newpipe.restricted.CommentsModeManager;
 import org.schabi.newpipe.util.ExtractorHelper;
 
 import java.util.List;
@@ -104,8 +105,25 @@ public class CommentsFragment extends BaseListInfoFragment<CommentsInfoItem, Com
     // Load and handle
     //////////////////////////////////////////////////////////////////////////*/
 
+    /**
+     * Comments switch: the tab is hidden while the switch is on, so this is the second layer of the
+     * same refusal - an instance that is restored from a saved state or reached by any future caller
+     * must not load anything either.
+     */
+    @Override
+    public void startLoading(final boolean forceLoad) {
+        if (CommentsModeManager.isEnabled(getContext())) {
+            showEmptyState();
+            return;
+        }
+        super.startLoading(forceLoad);
+    }
+
     @Override
     protected Single<ListExtractor.InfoItemsPage<CommentsInfoItem>> loadMoreItemsLogic() {
+        if (CommentsModeManager.isEnabled(getContext())) {
+            return Single.fromCallable(ListExtractor.InfoItemsPage::emptyPage);
+        }
         return ExtractorHelper.getMoreCommentItems(serviceId, currentInfo, currentNextPage);
     }
 

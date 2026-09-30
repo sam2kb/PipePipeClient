@@ -21,6 +21,7 @@ import org.schabi.newpipe.extractor.stream.StreamType
 import org.schabi.newpipe.ktx.animate
 import org.schabi.newpipe.ktx.animateRotation
 import org.schabi.newpipe.player.helper.PlayerHelper
+import org.schabi.newpipe.restricted.RestrictedChannelAccess
 import org.schabi.newpipe.util.external_communication.KoreUtils
 
 /**
@@ -178,6 +179,15 @@ class PlayerLayoutController(private val player: Player) {
             binding.sleepTimer.visibility = View.GONE
         }
         player.clickController.setMuteButton(binding.switchMute, player.isMuted())
+
+        // Restricted Mode: no handing the stream over to another application (browser, external
+        // player, Kodi) and no sharing of a link out of a locked-down client. The click handlers
+        // are no-ops as well, so hiding the views is only the visible part.
+        if (RestrictedChannelAccess.isRestricted(player.context)) {
+            binding.share.visibility = View.GONE
+            binding.playWithKodi.visibility = View.GONE
+            binding.openInBrowser.visibility = View.GONE
+        }
 
         binding.moreOptionsButton.animateRotation(
             Player.DEFAULT_CONTROLS_DURATION.toLong(), 0)

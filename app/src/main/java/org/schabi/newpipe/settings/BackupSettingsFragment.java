@@ -25,6 +25,7 @@ import org.schabi.newpipe.extractor.localization.ContentCountry;
 import org.schabi.newpipe.extractor.localization.Localization;
 import org.schabi.newpipe.local.subscription.SubscriptionManager;
 import org.schabi.newpipe.local.subscription.SubscriptionsImportExportHelper;
+import org.schabi.newpipe.restricted.RestrictedChannelAccess;
 import org.schabi.newpipe.streams.io.NoFileManagerSafeGuard;
 import org.schabi.newpipe.streams.io.StoredFileHelper;
 import org.schabi.newpipe.util.NavigationHelper;
@@ -153,6 +154,24 @@ public class BackupSettingsFragment extends BasePreferenceFragment {
             return true;
         });
 
+        // Restricted Mode: the subscription list is the administrator-controlled allowlist, so
+        // every way of changing it from here is disabled. That includes the whole-database restore,
+        // which would otherwise replace the subscriptions table without going through the DAO.
+        if (RestrictedChannelAccess.isRestricted(requireContext())) {
+            final String summary = getString(R.string.restricted_mode_subscriptions_read_only);
+            for (final int key : new int[] {
+                    R.string.import_data,
+                    R.string.import_subscriptions_key,
+                    R.string.import_youtube_subscriptions_key,
+                    R.string.import_soundcloud_subscriptions_key,
+                    R.string.clear_subscriptions_key}) {
+                final Preference preference = findPreference(getString(key));
+                if (preference != null) {
+                    preference.setEnabled(false);
+                    preference.setSummary(summary);
+                }
+            }
+        }
     }
 
     private void clearSubscriptions() {

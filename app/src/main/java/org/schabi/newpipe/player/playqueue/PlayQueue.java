@@ -14,6 +14,7 @@ import org.schabi.newpipe.player.playqueue.events.RecoveryEvent;
 import org.schabi.newpipe.player.playqueue.events.RemoveEvent;
 import org.schabi.newpipe.player.playqueue.events.ReorderEvent;
 import org.schabi.newpipe.player.playqueue.events.SelectEvent;
+import org.schabi.newpipe.restricted.RestrictedQueueFilter;
 
 import java.io.Serializable;
 import java.util.ArrayList;
@@ -322,7 +323,12 @@ public abstract class PlayQueue implements Serializable {
 
     private synchronized void appendInternal(@NonNull final List<PlayerMediaItem> items,
                                              final boolean autoQueued) {
-        final List<PlayerMediaItem> itemList = new ArrayList<>(items);
+        // Restricted Mode security boundary: no entry whose channel is not subscribed can enter a
+        // play queue, whether it was appended by the user (enqueue / enqueue next / play all) or by
+        // the player itself (related videos, next partition, lazily fetched playlist pages).
+        final List<PlayerMediaItem> allowedItems =
+                RestrictedQueueFilter.filterItems(null, items);
+        final List<PlayerMediaItem> itemList = new ArrayList<>(allowedItems);
 
         if (isShuffled()) {
             backup.addAll(itemList);

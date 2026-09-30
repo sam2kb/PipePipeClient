@@ -38,6 +38,7 @@ import org.schabi.newpipe.databinding.FragmentMainBinding;
 import org.schabi.newpipe.error.ErrorUtil;
 import org.schabi.newpipe.extractor.exceptions.ExtractionException;
 import org.schabi.newpipe.fragments.list.search.SearchFragment;
+import org.schabi.newpipe.restricted.RestrictedChannelAccess;
 import org.schabi.newpipe.settings.tabs.Tab;
 import org.schabi.newpipe.settings.tabs.TabsManager;
 import org.schabi.newpipe.util.NavigationHelper;
@@ -178,6 +179,24 @@ public class MainFragment extends BaseFragment implements TabLayout.OnTabSelecte
     private void setupTabs() {
         tabsList.clear();
         tabsList.addAll(tabsManager.getTabs());
+
+        // Restricted Mode: drop every discovery tab (kiosks such as Trending or Popular, and the
+        // default kiosk) and every pinned channel tab whose channel is not subscribed. What is
+        // left is the subscription feed, the subscriptions themselves and the local lists, which
+        // is the surface this mode is meant to expose.
+        if (RestrictedChannelAccess.isRestricted(requireContext())) {
+            tabsList.removeIf(tab -> tab instanceof Tab.KioskTab
+                    || tab instanceof Tab.DefaultKioskTab
+                    || (tab instanceof Tab.ChannelTab
+                        && !RestrictedChannelAccess.isSubscribedBlocking(requireContext(),
+                                ((Tab.ChannelTab) tab).getChannelServiceId(),
+                                ((Tab.ChannelTab) tab).getChannelUrl())));
+            if (tabsList.isEmpty()) {
+                // A configuration that consisted only of removed tabs must not leave an empty main
+                // screen; fall back to the feed, which is the primary surface of this mode.
+                tabsList.add(Tab.Type.FEED.getTab());
+            }
+        }
 
         if (pagerAdapter == null || !pagerAdapter.sameTabs(tabsList)) {
             pagerAdapter = new SelectedTabsPagerAdapter(requireContext(),

@@ -4,6 +4,7 @@ import org.schabi.newpipe.R
 import org.schabi.newpipe.extractor.stream.StreamInfo
 import org.schabi.newpipe.extractor.stream.StreamInfoItem
 import org.schabi.newpipe.player.helper.PlayerHelper
+import org.schabi.newpipe.restricted.RestrictedChannelAccess
 import java.util.Arrays
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
@@ -30,6 +31,14 @@ class AutoQueueController(private val player: Player) {
 
     fun maybeAutoQueueNextStream(info: StreamInfo, forceEnqueue: Boolean) {
         val playQueue = player.playQueue ?: return
+
+        // Restricted Mode: the auto-queue is fed from "related videos", which is a discovery
+        // surface. It is switched off entirely rather than filtered, so that restricted playback
+        // can never wander into a channel the administrator did not approve. (A filtered auto-queue
+        // would also silently produce empty appends for every non-subscribed suggestion.)
+        if (RestrictedChannelAccess.isRestricted(context)) {
+            return
+        }
 
         val partitions: List<StreamInfoItem> = info.partitions
         if (partitions.size > 1

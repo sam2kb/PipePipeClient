@@ -21,6 +21,7 @@ import org.schabi.newpipe.download.DownloadDialog;
 import org.schabi.newpipe.local.dialog.PlaylistAppendDialog;
 import org.schabi.newpipe.local.dialog.PlaylistDialog;
 import org.schabi.newpipe.local.history.HistoryRecordManager;
+import org.schabi.newpipe.restricted.RestrictedChannelAccess;
 import org.schabi.newpipe.util.NavigationHelper;
 import org.schabi.newpipe.util.ServiceHelper;
 import org.schabi.newpipe.util.external_communication.KoreUtils;
@@ -132,6 +133,13 @@ public enum StreamDialogDefaultEntry {
     DOWNLOAD(R.string.download, (fragment, item) ->
             fetchStreamInfoAndSaveToDatabase(fragment.requireContext(), item.getServiceId(),
                     item.getUrl(), info -> {
+                        // Restricted Mode: downloading hands out the video file, so it is
+                        // authorized on the resolved stream exactly like playback is.
+                        if (!RestrictedChannelAccess.isSubscribedBlocking(fragment.requireContext(),
+                                info.getServiceId(), info.getUploaderUrl())) {
+                            RestrictedChannelAccess.notifyVideoBlocked(fragment.requireContext());
+                            return;
+                        }
                         final DownloadDialog downloadDialog
                                 = DownloadDialog.newInstance(fragment.requireContext(), info);
                         downloadDialog.show(fragment.getChildFragmentManager(), "downloadDialog");

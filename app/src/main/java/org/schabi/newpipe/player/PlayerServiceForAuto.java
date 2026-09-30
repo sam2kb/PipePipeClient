@@ -162,6 +162,18 @@ public final class PlayerServiceForAuto extends MediaBrowserServiceCompat implem
         }
 
         player.handleIntent(intent);
+        // Only a refusal may leave the player without a queue at this point: an intent that resumes
+        // playback installs its queue from a watch history callback, i.e. after handleIntent()
+        // returned, and stopping the service here would cancel that start (and, because the caller
+        // retries, loop forever).
+        if (player.getPlayQueue() == null && player.wasLastIntentRefusedForRestrictedMode()) {
+            // Restricted Mode dropped the incoming queue before it was installed; leaving a
+            // foreground notification behind for a silent service would be a visible artefact of
+            Log.i(TAG, "Restricted Mode refused the play queue, stopping the service");
+            NotificationUtil.getInstance().startForegroundWithDummyNotification(this);
+            stopService();
+            return START_NOT_STICKY;
+        }
         if (player.getMediaSessionManager() != null) {
             player.getMediaSessionManager().handleMediaButtonIntent(intent);
         }

@@ -37,6 +37,7 @@ import org.schabi.newpipe.R;
 import org.schabi.newpipe.database.subscription.SubscriptionEntity;
 import org.schabi.newpipe.extractor.NewPipe;
 import org.schabi.newpipe.extractor.subscription.SubscriptionItem;
+import org.schabi.newpipe.restricted.RestrictedChannelAccess;
 import org.schabi.newpipe.streams.io.SharpInputStream;
 import org.schabi.newpipe.streams.io.StoredFileHelper;
 import org.schabi.newpipe.util.Constants;
@@ -79,6 +80,14 @@ public class SubscriptionsImportService extends BaseImportExportService {
     @Override
     public int onStartCommand(final Intent intent, final int flags, final int startId) {
         if (intent == null || subscription != null) {
+            return START_NOT_STICKY;
+        }
+
+        // Restricted Mode: subscription imports are refused before any network or file access, so
+        // that even a stale or externally triggered import intent cannot widen the allowlist.
+        if (RestrictedChannelAccess.isRestricted(this)) {
+            RestrictedChannelAccess.notifySubscriptionsReadOnly(this);
+            stopSelf(startId);
             return START_NOT_STICKY;
         }
 

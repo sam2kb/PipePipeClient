@@ -26,6 +26,7 @@ import org.schabi.newpipe.extractor.NewPipe;
 import org.schabi.newpipe.extractor.downloader.Downloader;
 import org.schabi.newpipe.extractor.services.youtube.YoutubeApiDecoder;
 import org.schabi.newpipe.ktx.ExceptionUtils;
+import org.schabi.newpipe.restricted.RestrictedModeManager;
 import org.schabi.newpipe.settings.NewPipeSettings;
 import org.schabi.newpipe.util.*;
 import org.schabi.newpipe.youtube.LocalDomPoTokenProvider;
@@ -92,6 +93,14 @@ public class App extends MultiDexApplication {
             Log.i(TAG, "This is the ACRA sender process! "
                     + "Aborting initialization of App[onCreate]");
             return;
+        }
+
+        // Restricted Mode: make sure the app-specific external files directory exists before
+        // anything else, so that the administrator can create the .subscriptions_only.lock
+        // sentinel over ADB at any time.
+        RestrictedModeManager.ensureSentinelDirectory(this);
+        if (RestrictedModeManager.isEnabled(this)) {
+            Log.i(TAG, "Restricted Mode is ON (subscriptions-only)");
         }
 
         EdgeToEdgeWorkaround.apply();

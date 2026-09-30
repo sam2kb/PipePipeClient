@@ -38,6 +38,7 @@ import androidx.preference.PreferenceManager;
 
 import org.schabi.newpipe.MainActivity;
 import org.schabi.newpipe.R;
+import org.schabi.newpipe.restricted.RestrictedChannelAccess;
 import org.schabi.newpipe.extractor.ListExtractor.InfoItemsPage;
 import org.schabi.newpipe.extractor.channel.ChannelInfo;
 import org.schabi.newpipe.extractor.channel.ChannelTabInfo;
@@ -78,6 +79,29 @@ public final class ExtractorHelper {
         }
     }
 
+    /**
+     * Restricted Mode: a search page can contain channels that the administrator did not
+     * approve. Drops those entries and tells the user when the page was incomplete.
+     *
+     * @param serviceId the service the search was run against
+     * @param info the page to filter, replaced by the filtered page
+     * @return the same page, so that it can be used in a stream
+     */
+    private static SearchInfo filterRestrictedSearchPage(final int serviceId,
+                                                        final SearchInfo info) {
+        if (info == null) {
+            return null;
+        }
+        final List<InfoItem> items = info.getRelatedItems();
+        final List<InfoItem> allowed = RestrictedChannelAccess.allowedItems(null, serviceId,
+                items);
+        if (allowed.size() != items.size()) {
+            RestrictedChannelAccess.notifyResultsFiltered(null);
+            info.setRelatedItems(allowed);
+        }
+        return info;
+    }
+
     public static Single<SearchInfo> searchFor(final int serviceId, final String searchString,
                                                final List<FilterItem> contentFilter,
                                                final List<FilterItem> sortFilter) {
@@ -87,9 +111,13 @@ public final class ExtractorHelper {
             SearchQueryHandler handler = NewPipe.getService(serviceId)
                     .getSearchQHFactory()
                     .fromQuery(searchString, contentFilter, sortFilter);
+            // Restricted Mode: service-wide search runs, but the pages it produces are filtered to
+            // subscribed channels right here, so every caller (search fragment, Android Auto media
+            // browser, text-link search) only ever receives authorized results.
             return Single.fromCallable(() ->
                     SearchInfo.getInfo(service,
-                            handler));
+                            handler))
+                    .map(info -> filterRestrictedSearchPage(serviceId, info));
         } catch (ExtractionException e) {
             throw new RuntimeException(e);
         }
@@ -102,16 +130,31 @@ public final class ExtractorHelper {
             final List<FilterItem> sortFilter,
             final Page page) {
         checkServiceId(serviceId);
+        // Restricted Mode: the pages of a search are filtered here, like its first page.
         return Single.fromCallable(() ->
                 SearchInfo.getMoreItems(NewPipe.getService(serviceId),
                         NewPipe.getService(serviceId)
                                 .getSearchQHFactory()
-                                .fromQuery(searchString, contentFilter, sortFilter), page));
+                                .fromQuery(searchString, contentFilter, sortFilter), page))
+                .map(infoPage -> {
+                    final List<InfoItem> items = infoPage.getItems();
+                    final List<InfoItem> allowed = RestrictedChannelAccess.allowedItems(
+                            null, serviceId, items);
+                    if (allowed.size() == items.size()) {
+                        return infoPage;
+                    }
+                    RestrictedChannelAccess.notifyResultsFiltered(null);
+                    return new InfoItemsPage<InfoItem>(allowed, infoPage.getNextPage(),
+                            infoPage.getErrors());
+                });
 
     }
 
     public static Single<List<String>> suggestionsFor(final int serviceId, final String query) {
         checkServiceId(serviceId);
+        if (RestrictedChannelAccess.isRestricted(null)) {
+            return Single.fromCallable(Collections::<String>emptyList);
+        }
         return Single.fromCallable(() -> {
             final SuggestionExtractor extractor = NewPipe.getService(serviceId)
                     .getSuggestionExtractor();

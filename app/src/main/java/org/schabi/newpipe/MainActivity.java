@@ -75,6 +75,8 @@ import org.schabi.newpipe.player.PlayerIntentConstants;
 import org.schabi.newpipe.player.event.OnKeyDownListener;
 import org.schabi.newpipe.player.helper.PlayerHolder;
 import org.schabi.newpipe.player.playqueue.PlayQueue;
+import org.schabi.newpipe.restricted.RestrictedChannelAccess;
+import org.schabi.newpipe.restricted.RestrictedModeManager;
 import org.schabi.newpipe.util.*;
 import org.schabi.newpipe.util.external_communication.ShareUtils;
 import org.schabi.newpipe.views.FocusOverlayView;
@@ -307,12 +309,17 @@ public class MainActivity extends AppCompatActivity {
 
         int kioskId = 0;
 
-        for (final String ks : service.getKioskList().getAvailableKiosks()) {
-            drawerLayoutBinding.navigation.getMenu()
-                    .add(R.id.menu_tabs_group, kioskId, 0, KioskTranslator
-                            .getTranslatedKioskName(ks, this))
-                    .setIcon(KioskTranslator.getKioskIcon(ks));
-            kioskId++;
+        // Restricted Mode: the drawer must not offer Trending / Popular / any other kiosk, as
+        // those are service-wide discovery surfaces. The rest of the drawer (subscriptions, feed,
+        // bookmarks, history, settings) is added as usual.
+        if (!RestrictedChannelAccess.isRestricted(this)) {
+            for (final String ks : service.getKioskList().getAvailableKiosks()) {
+                drawerLayoutBinding.navigation.getMenu()
+                        .add(R.id.menu_tabs_group, kioskId, 0, KioskTranslator
+                                .getTranslatedKioskName(ks, this))
+                        .setIcon(KioskTranslator.getKioskIcon(ks));
+                kioskId++;
+            }
         }
 
         drawerLayoutBinding.navigation.getMenu()
@@ -325,9 +332,11 @@ public class MainActivity extends AppCompatActivity {
         drawerLayoutBinding.navigation.getMenu()
                 .add(R.id.menu_tabs_group, ITEM_ID_BOOKMARKS, ORDER, R.string.tab_bookmarks)
                 .setIcon(R.drawable.ic_bookmark);
-        drawerLayoutBinding.navigation.getMenu()
-                .add(R.id.menu_tabs_group, ITEM_ID_DOWNLOADS, ORDER, R.string.downloads)
-                .setIcon(R.drawable.ic_file_download);
+        if (!RestrictedChannelAccess.isRestricted(this)) {
+            drawerLayoutBinding.navigation.getMenu()
+                    .add(R.id.menu_tabs_group, ITEM_ID_DOWNLOADS, ORDER, R.string.downloads)
+                    .setIcon(R.drawable.ic_file_download);
+        }
         drawerLayoutBinding.navigation.getMenu()
                 .add(R.id.menu_tabs_group, ITEM_ID_HISTORY, ORDER, R.string.action_history)
                 .setIcon(R.drawable.ic_history);
@@ -533,6 +542,12 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    /**
+     * Restricted Mode state as of the last {@link #onResume()} of this process, used to detect
+     * a change made through the sentinel file while the process was alive.
+     */
+    private static Boolean restrictedModeOnResume;
+
     @Override
     protected void onResume() {
         assureCorrectAppLanguage(this);
@@ -581,6 +596,31 @@ public class MainActivity extends AppCompatActivity {
                 getString(R.string.enable_watch_history_key), true);
         drawerLayoutBinding.navigation.getMenu().findItem(ITEM_ID_HISTORY)
                 .setVisible(isHistoryEnabled);
+
+        // Restricted Mode is controlled from outside the app (a sentinel file), so its state can
+        // change while the process is alive. Re-read it on every resume; when it changed, rebuild
+        // the activity so that menus, tabs and the drawer match the new state.
+        final boolean restrictedNow = RestrictedModeManager.isEnabled(this);
+        if (restrictedModeOnResume == null) {
+            // First resume of this process: the UI is being built with the current value anyway.
+            restrictedModeOnResume = restrictedNow;
+        } else if (restrictedModeOnResume != restrictedNow) {
+            restrictedModeOnResume = restrictedNow;
+            Log.i(TAG, "Restricted Mode changed to " + restrictedNow + ", recreating activity");
+            ActivityCompat.recreate(this);
+            return;
+        }
+
+        if (restrictedNow) {
+            // The drawer menu is rebuilt on every resume, so the Downloads entry has to be hidden
+            // here as well as left out when the menu is constructed.
+            final MenuItem downloadsItem =
+                    drawerLayoutBinding.navigation.getMenu().findItem(ITEM_ID_DOWNLOADS);
+            if (downloadsItem != null) {
+                downloadsItem.setVisible(false);
+            }
+        }
+
     }
 
     @Override

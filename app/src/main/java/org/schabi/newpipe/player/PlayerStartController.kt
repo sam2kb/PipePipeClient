@@ -6,6 +6,8 @@ import com.google.android.exoplayer2.C
 import org.schabi.newpipe.R
 import org.schabi.newpipe.player.helper.PlayerHelper
 import org.schabi.newpipe.player.playqueue.PlayQueue
+import org.schabi.newpipe.restricted.RestrictedChannelAccess
+import org.schabi.newpipe.restricted.RestrictedQueueFilter
 import org.schabi.newpipe.util.NavigationHelper
 import org.schabi.newpipe.util.SerializedCache
 
@@ -20,7 +22,15 @@ import org.schabi.newpipe.util.SerializedCache
  */
 class PlayerStartController(private val player: Player) {
 
+    /**
+     * Whether the last [handleIntent] call dropped its intent because Restricted Mode refused
+     * the play queue it carried.
+     */
+    var refusedForRestrictedMode = false
+        private set
+
     fun handleIntent(intent: Intent) {
+        refusedForRestrictedMode = false
         val intentStartupTraceId = PlaybackStartupTrace.fromIntent(intent)
         if (intentStartupTraceId > 0) {
             player.setStartupTraceId(intentStartupTraceId)
@@ -30,6 +40,17 @@ class PlayerStartController(private val player: Player) {
         val queueCache = intent.getStringExtra(PlayerIntentConstants.PLAY_QUEUE_KEY) ?: return
         val newQueue = SerializedCache.getInstance().take(queueCache, PlayQueue::class.java)
             ?: return
+
+        // Restricted Mode: this is the single funnel through which *every* service intent reaches
+        // the player (main, popup, background, enqueue, enqueue next, notification and media button
+        val currentQueue = player.playQueue
+        if (currentQueue == null || currentQueue != newQueue) {
+            if (!RestrictedQueueFilter.filterInPlace(player.context, newQueue)) {
+                refusedForRestrictedMode = true
+                RestrictedChannelAccess.notifyVideoBlocked(player.context)
+                return
+            }
+        }
 
         val oldPlayerType = player.playerType
         player.setPlayerType(PlayerHelper.retrievePlayerTypeFromIntent(intent))
